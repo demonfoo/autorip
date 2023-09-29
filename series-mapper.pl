@@ -29,12 +29,12 @@ foreach my $item (@disc_titlelists) {
 if (defined $seasonnum && $seasonnum ne '') {
     # we're looking at just a single season, filter to just the episodes
     # from the season indicated
-    $seriesinfo = [ map { if (${$_}{seasonNumber} == $seasonnum || (exists(${$_}{airsBeforeSeason}) && (${$_}{airsBeforeSeason} == $seasonnum) && ((${$_}{runtime} || 0) > $minlen) && (${$_}{name} =~ m{\b(?:mini-?series|pilot)\b}i))) { $_ } else { () } } @{${$seriesinfo}{data}{episodes}} ];
+    $seriesinfo = [ map { if (${$_}{seasonNumber} == $seasonnum || (exists(${$_}{airsBeforeSeason}) && (${$_}{airsBeforeSeason} == $seasonnum) && ((${$_}{runtime} || 0) > $minlen) && (${$_}{name} =~ m{\b(?:mini-?series|pilot)\b}i) && (${$_}{name} !~ m{\bunaired\s+pilot\b}i))) { $_ } else { () } } @{${$seriesinfo}{data}{episodes}} ];
 }
 else {
     # we still need to filter, but only to the ones with a season number,
     # any season number, so long as it's not 0/"not a season" episodes.
-    $seriesinfo = [ map { if (${$_}{seasonNumber} > 0 || (exists(${$_}{airsBeforeSeason}) && ((${$_}{runtime} || 0) > $minlen) && ${$_}{name} =~ m{\b(?:mini-?series|pilot)\b}i)) { $_ } else { () } } @{${$seriesinfo}{data}{episodes}} ];
+    $seriesinfo = [ map { if (${$_}{seasonNumber} > 0 || (exists(${$_}{airsBeforeSeason}) && ((${$_}{runtime} || 0) > $minlen) && (${$_}{name} =~ m{\b(?:mini-?series|pilot)\b}i) && (${$_}{name} !~ m{\bunaired\s+pilot\b}i))) { $_ } else { () } } @{${$seriesinfo}{data}{episodes}} ];
 }
 
 sub round {
@@ -272,7 +272,7 @@ for (my $i = 0; $i <= $#{$seriesinfo}; $i++) {
             # episode in the list...
             next TITLE if $#{$seriesinfo} < ($i+1);
             # double episode length check...
-            next TITLE if abs(${$seriesinfo}[$i+1]{runtime} + ${$seriesinfo}[$i]{runtime} - round($disc_titlelists[$j][$k]{length} / 60)) > 6;
+            next TITLE if abs(${$seriesinfo}[$i+1]{runtime} + ${$seriesinfo}[$i]{runtime} - round($disc_titlelists[$j][$k]{length} / 60)) > 7;
             # possible double episode?
             print {*STDERR} "matched, think this is a double episode\n";
             $discmap[$i] = $discmap[$i+1] = [$j, $k];
