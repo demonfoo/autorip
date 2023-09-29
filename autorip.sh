@@ -150,193 +150,6 @@ CMDPREFIX=()
 # shellcheck disable=SC2034
 PACKAGES=('udftools' 'sudo' 'dvdbackup' 'smartmontools' 'lsdvd' 'python-yq' 'lsof' 'jq')
 
-# Get title info with 'eac3to' for Blu-ray Discs (and UHD Blu-rays).
-my_eac3to_gettitles() {
-    local MOUNTPOINT="${1}"
-
-    eac3to "${MOUNTPOINT}" 2> /dev/null | perl <(cat <<'_EOT_'
-use strict;
-use warnings;
-use JSON;
-use Array::Utils qw(:all);
-use English qw(-no_match_vars);
-use Carp qw(croak);
-use Scalar::Util qw(refaddr);
-
-my $data = [];
-
-my %langmap;
-for (my $i = 0; $i < (scalar(@ARGV) / 2) - 1; $i++) {
-    $langmap{$ARGV[$i]} = $ARGV[(scalar(@ARGV) / 2) + $i];
-}
-
-my %widths = ( '480' => '720', '576' => '720', '720' => '1280',
-               '1080' => '1920', '2160' => '3840' );
-my %channelmap = ( 'mono' => '1', 'stereo' => '2', 'multi-channel' => '6' );
-my %codecmap = ('AC3' => 'ac3', 'DTS' => 'dts', 'DTS Master Audio' => 'dtshd',
-                'DTS Hi-Res' => 'dtshd', 'TrueHD' => 'truehd',
-                'TrueHD/AC3' => 'truehd', 'E-AC3' => 'eac3',
-                'RAW/PCM' => 'lpcm');
-
-my $title;
-my $audiotracknum = 1;
-my $got_videoinfo = 0;
-while (<STDIN>) {
-    chomp;
-
-    if (m{^\x08*(?<titlenum>\d+)\) (?<playlist>\d{5}\.mpls), (?:(?<streams>\d{5}\.m2ts(?:\+\d{5}.m2ts)*), )?(?<runtime>\d:\d{2}:\d{2})\s*$}) {
-        my $time = ${^CAPTURE}{runtime};
-        $title = {};
-        $got_videoinfo = 0;
-        push @{$data}, $title;
-        ${$title}{ix}       = ${^CAPTURE}{titlenum};
-        ${$title}{audio}    = [];
-        #${$title}{chapter}  = [];
-        ${$title}{playlist} = ${^CAPTURE}{playlist};
-        if (defined ${^CAPTURE}{streams}) {
-            ${$title}{streams}  = [split(m{\+}, ${^CAPTURE}{streams})];
-        }
-        my @runtime         = split(m{:}, $time);
-        ${$title}{length}   = sprintf('%d', ($runtime[0] * 3600) + ($runtime[1] * 60) + $runtime[2]);
-    }
-    elsif (m{^\x08*    ?\[(?<streams>\d{1,5}(?:\+\d{1,5})*)\]\.m2ts\s*$}) {
-        ${$title}{streams}  = [ map { sprintf('%05d.m2ts', $_); } split(m{\+}, ${^CAPTURE}{streams}) ];
-    }
-    #elsif (m{^\x08*    ?- Chapters, (?<nchapters>\d+) chapters\s*$}) {
-    #    for (my $i = 1; $i <= ${^CAPTURE}{nchapters}; $i++) {
-    #        push @{${$title}{chapter}}, {};
-    #    }
-    #}
-    elsif (m{^\x08*    ?- (?<codec>[^,]+), (?<res>\d+)(?<prog>[ip])(?<framerate>\d+)(?: /(?<divisor>1\.001))? \((?<aspect>\d+:\d+)\)(?:, (?<hdrformat>[^,]+), (?<colorspace>BT\.(?:709|2020)))?\s*$}) {
-        next if $got_videoinfo == 1;
-        my %captures = %{^CAPTURE};
-        $captures{aspect} =~ s{:}{/};
-        ${$title}{aspect} = $captures{aspect};
-        if (defined $captures{divisor}) {
-            $captures{framerate} /= $captures{divisor};
-        }
-        if ($captures{prog} eq 'i') {
-            $captures{framerate} /= 2;
-        }
-        my $fps = sprintf('%0.3f', $captures{framerate});
-        $fps =~ s{\.?0+$}{};
-        ${$title}{fps}          = $fps;
-        ${$title}{progressive}  = $captures{prog} eq 'p' ? 'true' : 'false';
-        ${$title}{height}       = $captures{res};
-        ${$title}{width}        = $widths{$captures{res}};
-        ${$title}{format}       = $captures{codec};
-        if (defined $captures{hdrformat}) {
-            ${$title}{hdrformat}    = $captures{hdrformat};
-            ${$title}{colorspace}   = $captures{colorspace};
-        }
-        $got_videoinfo          = 1;
-    }
-    elsif (m{^\x08*    ?- (?<codec>[^,]+), (?<language>[^,]+), (?<channels>[[:alpha:]-]+), (?<rate>\d+)kHz\s*$}) {
-        my $audio = {};
-        ${$audio}{ix}           = $audiotracknum++;
-        ${$audio}{language}     = ${^CAPTURE}{language};
-        ${$audio}{langcode}     = $langmap{${^CAPTURE}{language}};
-        ${$audio}{channels}     = $channelmap{${^CAPTURE}{channels}};
-        ${$audio}{frequency}    = ${^CAPTURE}{rate} . '000';
-        ${$audio}{format}       = $codecmap{${^CAPTURE}{codec}};
-        push @{${$title}{audio}}, $audio;
-    }
-}
-
-sub isSimplyIncreasingSequence {
-    my ($seq) = @_;
-
-    unless (defined($seq)
-            and ('ARRAY' eq ref $seq)) {
-        croak 'Expecting a reference to an array as first argument';
-    }
-
-    return 1 if @$seq < 2;
-
-    my $first = $seq->[0];
-
-    for my $n (1 .. $#$seq) {
-        return unless $seq->[$n] == $first + $n;
-    }
-
-    return 1;
-}
-
-# look for a play-all title first...
-my $playall_title;
-my @checklist;
-OUTER:
-for (my $i = 0; $i <= $#{$data}; $i++) {
-    # using play length for now as a guess, hopefully can do that better later
-    if (scalar @{${$data}[$i]{streams}} >= 2 && ${$data}[$i]{length} > 5400) {
-        # okay, we've found one... so now what to do about it
-        my $matchcount = 0;
-        @checklist = ();
-        for (my $j = 0; $j <= $#{$data}; $j++) {
-            # don't look at the same title item
-            next if $j == $i;
-            next if scalar(@{${$data}[$i]{streams}}) == scalar(@{${$data}[$j]{streams}});
-            my @matches = intersect(@{${$data}[$i]{streams}}, @{${$data}[$j]{streams}});
-            if (scalar(@matches) == scalar(@{${$data}[$j]{streams}})) {
-                #print {*STDERR} "found a match in the playlist\n";
-                $matchcount++;
-                # find the first playlist item from the $j playlist, then
-                # find its offset in the $i playlist, then save the playlist
-                # in a temp array?
-                for (my $k = 0; $k <= $#{${$data}[$i]{streams}}; $k++) {
-                    if (${$data}[$j]{streams}[0] eq ${$data}[$i]{streams}[$k]) {
-                        $checklist[$k] = ${$data}[$j];
-                        #printf( {*STDERR} "added playlist %s at offset %d\n", $checklist[$k]{playlist}, $k);
-                    }
-                }
-            }
-        }
-        if ($matchcount == scalar(@{${$data}[$i]{streams}}) && $matchcount > 1) {
-            # can we find a sequence in the stuff in @checklist?
-            my @matchlist = map { ${$_}{playlist} =~ m{^0+(\d+)\.mpls$}; $1 } @checklist;
-            # if so, then use this alternative sort method
-            if (!isSimplyIncreasingSequence(\@matchlist)) {
-                #print {*STDERR} "looks like the playlist numbers aren't in a normal order, so sort a different way\n";
-                $playall_title = ${$data}[$i];
-                last OUTER;
-            }
-        }
-    }
-}
-
-if (defined $playall_title) {
-    # put the play-all list in first, then the titles in the play-all
-    # list order, then... whatever the fuck is left?
-    my $newlist = [ $playall_title, @checklist ];
-
-    for (my $i = 0; $i <= $#{$data}; $i++) {
-        if (${$data}[$i] eq $playall_title) {
-            delete ${$data}[$i];
-        }
-        for (my $j = 0; $j <= $#checklist; $j++) {
-            if (defined(${$data}[$i]) &&
-                    refaddr(${$data}[$i]) == refaddr($checklist[$j])) {
-                delete ${$data}[$i];
-            }
-        }
-        if (defined ${$data}[$i]) {
-            push @{$newlist}, ${$data}[$i];
-        }
-    }
-
-    $data = $newlist;
-}
-else {
-    # sort by mpls file name
-    $data = [ sort { ${$a}{playlist} cmp ${$b}{playlist} } @{$data} ];
-}
-
-print encode_json($data), "\n";
-_EOT_
-) "${!LANGS_TO_ISO639_1[@]}" "${LANGS_TO_ISO639_1[@]}"
-# ^^^ this will allow us to map language strings to codes
-}
-
 # See how far the disc read has gotten, for progress tracking purposes.
 find_process_read_offset() {
     local DEVICE="${1}"
@@ -356,7 +169,12 @@ extract_titleinfo() {
     local TYPE="${2}"
 
     if [ "${TYPE}" = 'bd' ] ; then
-        my_eac3to_gettitles "${BASEPATH}"
+        # turns out we can use makemkvcon to do the same thing with a
+        # different (though similar) perl script. as much as I like eac3to,
+        # it's a complicated dependency, and makemkv is critical to being
+        # able to dump blu ray discs at all, so we may as well use it for
+        # this too.
+        makemkv_get_titleinfo "${BASEPATH}"
     elif [ "${TYPE}" = 'dvd' ] ; then
         my_lsdvd_gettitles "${BASEPATH}"
     fi
@@ -544,6 +362,7 @@ do_cleanup() {
         # kill the processes, and if they signal they were interrupted,
         # remove partial dumps
         kill -s TERM "${DUMP_KILLPIDS[${key}]}" >& /dev/null
+        # FIXME: This doesn't work right with makemkv.
         if ! wait "${DUMP_PIDS[${key}]}" ; then
             rm -rf "${DUMP_PATHS[${key}]}"
         fi
@@ -602,6 +421,7 @@ check_for_unchecked_rips() {
 ELEMS=('/' '-' \\ '|')
 I=0
 
+declare -A MAPPED=()
 if [ "${#ALREADY[@]}" -gt 0 ] ; then
     echo 'Found extant disc dumps, let'\''s enumerate them.'
     echo ''
@@ -636,25 +456,23 @@ if [ "${#ALREADY[@]}" -gt 0 ] ; then
         if [ -z "${item}" ] ; then
             continue
         fi
+        # skip a series/season that's already been looked at.
+        if [ -n "${MAPPED[${DISC_SERIESID[${item}]}:${DISC_SEASONNUM[${item}]:-?}]:-}" ]
+        then
+            continue
+        fi
         # punt the rest of the job to the series solver subroutine...
         series_solver "${DISC_SERIESID[${item}]}" "${DISC_SEASONNUM[${item}]:-}" 'check_for_unchecked_rips'
 
         # once all the metadata is loaded, this does the whole series solve,
         # so do a pass through the array and nix other disc roots for the
         # same series(/season, if applicable).
-        for key2 in "${!ALREADY[@]}" ; do
-            if [ "${DISC_SERIESID[${ALREADY[${key2}]}]}" = "${DISC_SEASONNUM[${item}]:-}" ] ; then
-                if [ -z "${DISC_SEASONNUM[${item}]:-}" ] || \
-                        [ "${DISC_SEASONNUM[${ALREADY[${key2}]}]}" = "${DISC_SEASONNUM[${item}]}" ] ; then
-                    echo unset "ALREADY[${key2}]"
-                    unset "ALREADY[${key2}]"
-                fi
-            fi
-        done
+        MAPPED["${DISC_SERIESID[${item}]}:${DISC_SEASONNUM[${item}]:-?}"]=1
     done
 
     echo 'Enumerated extant disc dumps. Start looking for discs to rip...'
 fi
+MAPPED=()
 
 # start checking the drives for media; if media is present, try to suss out
 # if it's DVD or BD media, and dump out the file tree (if possible)
