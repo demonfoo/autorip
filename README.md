@@ -42,10 +42,10 @@ This requires the following tools:
 
 There are series/seasons that I know there are issues with:
 
-* _Terminator: The Sarah Connor Chronicles_ Season 2. A few episodes don't have their own titles. Looking for a solution.
-* _Fringe_ Season 2: Same as above.
 * _Terminator: The Sarah Connor Chronicles_ Season 1. Many episodes don't have their own titles, and are just tossed together. Will look for a solution.
 * _Fringe_ Season 1: Same as above. (Dear Warner Bros: This is bad authoring.)
+* _Terminator: The Sarah Connor Chronicles_ Season 2. A few episodes don't have their own titles. Looking for a solution.
+* _Fringe_ Season 2: Same as above.
 
 More will likely be added, but the _vast_ majority of seasons I own on disc
 work, so most should more generally.
